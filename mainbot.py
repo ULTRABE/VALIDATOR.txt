@@ -54,6 +54,20 @@ class CredentialValidatorBot:
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """🚀 /start command"""
         welcome_msg = """
+        🤖 **Credential Validator Bot**
+
+**Validates email:password combos against login pages**
+
+**📋 Supported formats:**
+user@gmail.com:password
+email@site.com:secret
+
+**⚙️ Workflow:**
+1. Send login URL
+2. Upload TXT file
+3. Get working creds instantly
+"""
+        
 🤖 **Credential Validator Bot**
 
 **Validates email:password combos against login pages**
