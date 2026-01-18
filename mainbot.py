@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-🤖 Credential Validator Bot - Railway Ready Single File
+ Credential Validator Bot - Railway Ready Single File
 Telegram bot for validating email:password credentials against login pages
 """
 
@@ -52,9 +52,9 @@ class CredentialValidatorBot:
         self.working_creds = []
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """🚀 /start command"""
+        """ /start command"""
         welcome_msg = """
-        🤖 **Credential Validator Bot**
+         **Credential Validator Bot**
 
 **Validates email:password combos against login pages**
 
@@ -68,8 +68,8 @@ email@site.com:secret
 3. Get working creds instantly
 """
         
-🤖 **Credential Validator Bot**
+ **Credential Validator Bot**
 
 **Validates email:password combos against login pages**
 
-**📋 Supported formats:**
+** Supported formats:**
