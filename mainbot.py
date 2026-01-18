@@ -58,7 +58,7 @@ class CredentialValidatorBot:
 
 **Validates email:password combos against login pages**
 
-**📋 Supported formats:**
+**Supported formats:**
 user@gmail.com:password
 email@site.com:secret
 
