@@ -1,12 +1,9 @@
-# 🤖 Credential Validator Bot
+# 🔥 Auth Checker Bot
 
-**Railway-ready single-file Telegram bot**
+Telegram bot for checking email:pass credentials against login pages.
 
 ## 🚀 Railway Deploy (2 minutes)
 
-1. **Fork this repo**
+1. **Fork repo** or create new repo with these files
 2. **Railway.app** → New Project → Deploy from GitHub
-3. **Add Variable:** `TELEGRAM_BOT_TOKEN`
-4. ✅ **Auto-deploys!**
-
-## 📱 Usage
+3. **Variables** (from `.env.example`):
