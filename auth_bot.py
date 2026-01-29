@@ -290,6 +290,10 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # ✅ URL VALID - SAVE STATE
         state['login_url'] = text
         state['step'] = 'waiting_file'
+        
+        # Initialize user session if not exists
+        if user_id not in user_sessions:
+            user_sessions[user_id] = {}
         user_sessions[user_id]['url'] = text
         
         await update.message.reply_text(
@@ -584,6 +588,7 @@ def main():
         
         app.add_handler(CallbackQueryHandler(callback_handler))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+        app.add_handler(MessageHandler(filters.Document.ALL, message_handler))  # Handle document uploads
         
         # Add post-init hook for startup notifications
         app.post_init = post_init
