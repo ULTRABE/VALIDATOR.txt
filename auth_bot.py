@@ -105,8 +105,9 @@ def update_stats(user_id: int, checks: int = 0, valids: int = 0):
 
 # ==================== BOT COMMANDS ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start command"""
+    """Start command with enhanced UI"""
     user_id = update.effective_user.id
+    username = update.effective_user.first_name or "User"
     
     # Create user
     try:
@@ -119,21 +120,44 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     credits = get_user_credits(user_id)
     
-    keyboard = [[InlineKeyboardButton("🔧 Proxy Setup", callback_data="proxy_menu")]]
+    keyboard = [
+        [InlineKeyboardButton("🔧 Configure Proxy", callback_data="proxy_menu")],
+        [InlineKeyboardButton("📊 My Statistics", callback_data="my_stats")],
+        [InlineKeyboardButton("❓ Help & Guide", callback_data="help_menu")]
+    ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    message = f"""🔥 **Auth Checker Bot**
+    message = f"""╔═══════════════════════════╗
+║   🔐 **AUTH CHECKER BOT**   ║
+╚═══════════════════════════╝
 
-💰 **Credits**: `{credits}`
+👋 Welcome back, **{username}**!
 
-📋 **How to use**:
-1️⃣ Send **login URL** (https://site.com/login)
-2️⃣ Upload **file** (email:pass format)
-3️⃣ ✅ Get **valid accounts**
+┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  💰 **Your Balance**
+┃  ➤ `{credits}` Credits Available
+┗━━━━━━━━━━━━━━━━━━━━━━━━┛
 
-💳 **Cost**: 1 credit = 1 line checked
+📋 **Quick Start Guide**
 
-🚀 **Ready! Send URL now**"""
+**Step 1️⃣** → Send Login URL
+   ✓ Example: `https://site.com/login`
+
+**Step 2️⃣** → Upload Credentials File
+   ✓ Format: `email:pass` (one per line)
+   ✓ Max: {MAX_LINES} lines per check
+
+**Step 3️⃣** → Get Results
+   ✓ Valid accounts highlighted
+   ✓ Instant notifications
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  💳 **Pricing**
+┃  ➤ 1 Credit = 1 Line Checked
+┃  ➤ Only pay for what you use
+┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+🚀 **Ready to start?** Send your login URL now!"""
     
     await update.message.reply_text(
         message,
@@ -146,7 +170,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"👤 User {user_id} started bot")
 
 async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin stats"""
+    """Admin stats with enhanced UI"""
     if update.effective_user.id != ADMIN_ID:
         return
     
@@ -157,33 +181,71 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         result = cursor.fetchone()
         conn.close()
         
-        message = f"""📊 **Bot Statistics**
+        total_users = result[0] or 0
+        total_checks = result[1] or 0
+        total_valids = result[2] or 0
+        avg_credits = int(result[3] or 0)
+        success_rate = (total_valids / total_checks * 100) if total_checks > 0 else 0
+        
+        message = f"""╔═══════════════════════════╗
+║   📊 **ADMIN DASHBOARD**    ║
+╚═══════════════════════════╝
 
-👥 **Users**: `{result[0] or 0}`
-🔍 **Total Checks**: `{result[1] or 0}`
-✅ **Valid Creds**: `{result[2] or 0}`
-💰 **Avg Credits**: `{int(result[3] or 0)}`"""
+┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  👥 **User Statistics**
+┃  ➤ Total Users: `{total_users}`
+┃  ➤ Avg Credits: `{avg_credits}`
+┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  🔍 **Check Statistics**
+┃  ➤ Total Checks: `{total_checks}`
+┃  ➤ Valid Found: `{total_valids}`
+┃  ➤ Success Rate: `{success_rate:.1f}%`
+┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+⏰ Updated: `{time.strftime('%Y-%m-%d %H:%M:%S')}`"""
         
         await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         await update.message.reply_text(f"❌ Stats error: {e}")
 
 async def proxy_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Proxy command"""
+    """Proxy command with enhanced UI"""
     user_id = update.effective_user.id
     user_states[user_id] = {'step': 'waiting_proxy'}
     
-    await update.message.reply_text(
-        """🔧 **Proxy Configuration**
+    current_proxy = user_sessions.get(user_id, {}).get('proxy', 'Not configured')
+    
+    message = f"""╔═══════════════════════════╗
+║   🔧 **PROXY SETTINGS**     ║
+╚═══════════════════════════╝
 
-📝 **Supported formats**:
-• `http://ip:port`
-• `http://user:pass@ip:port`
-• `socks5://ip:port`
+📡 **Current Proxy**
+➤ `{current_proxy}`
 
-✅ Send proxy URL or `/start` to skip""",
-        parse_mode=ParseMode.MARKDOWN
-    )
+┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  📝 **Supported Formats**
+┃
+┃  ✓ HTTP Proxy
+┃    `http://ip:port`
+┃
+┃  ✓ HTTP with Auth
+┃    `http://user:pass@ip:port`
+┃
+┃  ✓ SOCKS5 Proxy
+┃    `socks5://ip:port`
+┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+💡 **Examples:**
+• `http://192.168.1.1:8080`
+• `http://admin:secret@proxy.com:3128`
+• `socks5://10.0.0.1:1080`
+
+🔹 Send your proxy URL now
+🔹 Or use `/start` to skip"""
+    
+    await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
 
 # ==================== VALIDATORS ====================
 def validate_url(text: str) -> bool:
@@ -207,7 +269,7 @@ def validate_proxy(text: str) -> bool:
 
 # ==================== MAIN HANDLER ====================
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Main message handler"""
+    """Main message handler with enhanced UI"""
     user_id = update.effective_user.id
     text = (update.message.text or "").strip()
     
@@ -224,41 +286,70 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if validate_proxy(text):
             user_sessions[user_id] = user_sessions.get(user_id, {})
             user_sessions[user_id]['proxy'] = text
-            await update.message.reply_text(
-                f"✅ **Proxy saved**: `{text}`\n\n"
-                f"🔙 `/start` for main menu",
-                parse_mode=ParseMode.MARKDOWN
-            )
+            
+            message = f"""✅ **Proxy Configured Successfully!**
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  📡 **Active Proxy**
+┃  ➤ `{text}`
+┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+🔙 Use `/start` to return to main menu"""
+            
+            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
         else:
-            await update.message.reply_text(
-                "❌ **Invalid proxy**\n\n"
-                "✅ **Examples**:\n"
-                "• `http://1.2.3.4:8080`\n"
-                "• `http://user:pass@proxy.com:3128`",
-                parse_mode=ParseMode.MARKDOWN
-            )
+            message = f"""❌ **Invalid Proxy Format**
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  ✅ **Valid Examples**
+┃
+┃  • `http://1.2.3.4:8080`
+┃  • `http://user:pass@proxy.com:3128`
+┃  • `socks5://10.0.0.1:1080`
+┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+🔄 Please try again with correct format"""
+            
+            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
         user_states[user_id]['step'] = 'waiting_url'
         return
     
     # ========== URL STATE ==========
     if state['step'] == 'waiting_url':
         if update.message.document:
-            await update.message.reply_text(
-                "❌ **Step 1 first**: Send login URL 👆\n\n"
-                "✅ `https://example.com/login`",
-                parse_mode=ParseMode.MARKDOWN
-            )
+            message = f"""⚠️ **Wrong Order!**
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  **Step 1 Required First**
+┃  ➤ Send Login URL
+┃
+┃  ✅ Example:
+┃  `https://example.com/login`
+┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+📤 File upload comes in Step 2"""
+            
+            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
             return
         
         if not validate_url(text):
-            await update.message.reply_text(
-                f"❌ **Invalid URL**\n\n"
-                "✅ **Correct format**:\n"
-                "• `https://site.com/login`\n"
-                "• `https://sso.example.com`\n\n"
-                f"💰 You have `{get_user_credits(user_id)}` credits",
-                parse_mode=ParseMode.MARKDOWN
-            )
+            credits = get_user_credits(user_id)
+            
+            message = f"""❌ **Invalid URL Format**
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  ✅ **Correct Format**
+┃
+┃  • `https://site.com/login`
+┃  • `https://app.example.com/auth`
+┃  • `https://sso.company.com`
+┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+💰 Balance: `{credits}` credits
+
+🔄 Please send a valid HTTPS URL"""
+            
+            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
             return
         
         # ✅ URL VALID - SAVE STATE
@@ -266,24 +357,51 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         state['step'] = 'waiting_file'
         user_sessions[user_id]['url'] = text
         
-        await update.message.reply_text(
-            f"✅ **URL accepted**: `{text}`\n\n"
-            f"📤 **Step 2**: Upload file\n"
-            f"📄 Format: `email:pass` (one per line)\n\n"
-            f"💰 `{get_user_credits(user_id)}` credits available",
-            parse_mode=ParseMode.MARKDOWN
-        )
+        credits = get_user_credits(user_id)
+        
+        message = f"""✅ **URL Accepted Successfully!**
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  🔗 **Target URL**
+┃  ➤ `{text}`
+┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+📤 **Next Step: Upload File**
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  📄 **File Requirements**
+┃
+┃  ✓ Format: `email:pass`
+┃  ✓ One credential per line
+┃  ✓ Max: {MAX_LINES} lines
+┃  ✓ File type: .txt
+┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+💰 Available: `{credits}` credits
+💳 Cost: 1 credit per line
+
+📎 Upload your file now!"""
+        
+        await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
         return
     
     # ========== FILE STATE ==========
     if state['step'] == 'waiting_file':
         if not update.message.document:
-            await update.message.reply_text(
-                f"📤 **Upload file please**\n\n"
-                f"🔗 Current URL: `{state['login_url']}`\n"
-                f"📄 Must be `email:pass` format (.txt)",
-                parse_mode=ParseMode.MARKDOWN
-            )
+            message = f"""📤 **File Upload Required**
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  🔗 **Current URL**
+┃  ➤ `{state['login_url']}`
+┃
+┃  📄 **Required Format**
+┃  ➤ Text file (.txt)
+┃  ➤ Format: `email:pass`
+┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+📎 Please upload your credentials file"""
+            
+            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
             return
         
         # Download file
@@ -299,7 +417,20 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         except Exception as e:
             logger.error(f"File download error: {e}")
-            await update.message.reply_text("❌ **File download failed**\nTry smaller file")
+            
+            message = """❌ **File Download Failed**
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  💡 **Possible Solutions**
+┃
+┃  • Try a smaller file
+┃  • Check file format (.txt)
+┃  • Ensure proper encoding
+┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+🔄 Please try again"""
+            
+            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
         
         # Reset state
         state['step'] = 'waiting_url'
@@ -309,7 +440,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== FILE PROCESSING ====================
 async def process_credentials(update: Update, context: ContextTypes.DEFAULT_TYPE,
                             filename: str, login_url: str, proxy: str = ''):
-    """Process credential file"""
+    """Process credential file with enhanced UI"""
     user_id = update.effective_user.id
     
     try:
@@ -320,24 +451,76 @@ async def process_credentials(update: Update, context: ContextTypes.DEFAULT_TYPE
         total_lines = len(lines)
         
         if total_lines == 0:
-            await update.message.reply_text("❌ **No valid `email:pass` lines found**")
+            message = """❌ **No Valid Credentials Found**
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  📄 **Required Format**
+┃
+┃  ✓ `email:password`
+┃  ✓ One per line
+┃
+┃  ✅ Example:
+┃  `user@site.com:Pass123`
+┃  `admin@test.com:Secret456`
+┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+🔄 Please upload a properly formatted file"""
+            
+            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
             return
         
         if total_lines > MAX_LINES:
-            await update.message.reply_text(f"❌ **Too many lines** (max {MAX_LINES})")
+            message = f"""❌ **File Too Large**
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  📊 **Limits**
+┃
+┃  • Your file: `{total_lines}` lines
+┃  • Maximum: `{MAX_LINES}` lines
+┃  • Exceeded by: `{total_lines - MAX_LINES}` lines
+┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+💡 Split your file into smaller batches"""
+            
+            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
             return
         
         # Check credits
+        current_credits = get_user_credits(user_id)
         if not spend_credits(user_id, total_lines):
-            await update.message.reply_text("❌ **Insufficient credits**\nUse `/start` to check balance")
+            message = f"""❌ **Insufficient Credits**
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  💰 **Balance Check**
+┃
+┃  • Required: `{total_lines}` credits
+┃  • Available: `{current_credits}` credits
+┃  • Shortage: `{total_lines - current_credits}` credits
+┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+💳 Please contact admin to add credits"""
+            
+            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
             return
         
         # Update stats
         update_stats(user_id, total_lines)
         
+        remaining_credits = get_user_credits(user_id)
+        
         progress_msg = await update.message.reply_text(
-            f"🔍 **Checking {total_lines} credentials...**\n"
-            f"⏳ `{get_user_credits(user_id)}` credits remaining"
+            f"""🔍 **Validation Started**
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  📊 **Processing**
+┃  ➤ Total Lines: `{total_lines}`
+┃  ➤ Status: Initializing...
+┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+💰 Credits Remaining: `{remaining_credits}`
+
+⏳ Please wait...""",
+            parse_mode=ParseMode.MARKDOWN
         )
         
         # Process each line
@@ -348,31 +531,118 @@ async def process_credentials(update: Update, context: ContextTypes.DEFAULT_TYPE
             
             # Progress update
             if i % 10 == 0 or i == total_lines:
+                progress_percent = (i / total_lines) * 100
+                progress_bar = "█" * int(progress_percent / 5) + "░" * (20 - int(progress_percent / 5))
+                
                 await progress_msg.edit_text(
-                    f"📊 **Progress**: `{i}/{total_lines}`\n"
-                    f"✅ **Valid so far**: `{len(valid_creds)}`\n"
-                    f"⏳ `{get_user_credits(user_id)}` credits left"
+                    f"""🔍 **Validation In Progress**
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  📊 **Progress**
+┃  [{progress_bar}] `{progress_percent:.0f}%`
+┃
+┃  ➤ Checked: `{i}/{total_lines}`
+┃  ➤ Valid Found: `{len(valid_creds)}`
+┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+💰 Credits Left: `{remaining_credits}`
+
+⏳ Processing...""",
+                    parse_mode=ParseMode.MARKDOWN
                 )
             
             await asyncio.sleep(DELAY_SEC)
         
         # Final results
         if valid_creds:
-            result_text = "✅ **VALID CREDENTIALS FOUND**:\n\n" + "\n".join(valid_creds)
-            await context.bot.send_message(update.effective_chat.id, result_text)
+            # Send valid credentials
+            result_header = f"""╔═══════════════════════════╗
+║   ✅ **VALID ACCOUNTS**     ║
+╚═══════════════════════════╝
+
+🎉 **Success! Found {len(valid_creds)} valid credential(s)**
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  📋 **Valid Credentials**
+┃"""
+            
+            result_body = "\n┃  ".join([f"✓ `{cred}`" for cred in valid_creds])
+            
+            result_footer = f"""┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+📊 **Summary**
+• Total Checked: `{total_lines}`
+• Valid Found: `{len(valid_creds)}`
+• Success Rate: `{(len(valid_creds)/total_lines*100):.1f}%`
+
+💰 Remaining Credits: `{remaining_credits}`"""
+            
+            result_text = result_header + "\n┃  " + result_body + "\n" + result_footer
+            
+            await context.bot.send_message(
+                update.effective_chat.id,
+                result_text,
+                parse_mode=ParseMode.MARKDOWN
+            )
             
             update_stats(user_id, 0, len(valid_creds))
+            
             await progress_msg.edit_text(
-                f"🎉 **COMPLETE**\n"
-                f"✅ `{len(valid_creds)}/{total_lines}` valid\n"
-                f"💰 `{get_user_credits(user_id)}` credits left"
+                f"""🎉 **Validation Complete!**
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  ✅ **Results**
+┃
+┃  • Total Checked: `{total_lines}`
+┃  • Valid Found: `{len(valid_creds)}`
+┃  • Success Rate: `{(len(valid_creds)/total_lines*100):.1f}%`
+┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+💰 Credits Remaining: `{remaining_credits}`
+
+🔄 Use `/start` for new check""",
+                parse_mode=ParseMode.MARKDOWN
             )
         else:
-            await progress_msg.edit_text("❌ **No valid credentials found**")
+            await progress_msg.edit_text(
+                f"""❌ **No Valid Credentials Found**
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  📊 **Results**
+┃
+┃  • Total Checked: `{total_lines}`
+┃  • Valid Found: `0`
+┃  • All credentials invalid
+┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+💡 **Possible Reasons:**
+• Wrong login URL
+• Incorrect credentials
+• Site requires CAPTCHA
+• Rate limiting active
+
+💰 Credits Remaining: `{remaining_credits}`
+
+🔄 Use `/start` to try again""",
+                parse_mode=ParseMode.MARKDOWN
+            )
             
     except Exception as e:
         logger.error(f"Processing error: {e}")
-        await update.message.reply_text("❌ **Processing failed** - try again")
+        
+        message = """❌ **Processing Failed**
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  ⚠️ **Error Occurred**
+┃
+┃  • Check file format
+┃  • Verify URL is correct
+┃  • Try again in a moment
+┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+🔄 Use `/start` to retry"""
+        
+        await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
 
 async def test_credential(credential: str, login_url: str, proxy_url: str = '') -> bool:
     """Test single credential"""
@@ -433,12 +703,105 @@ async def cleanup_file(filename: str):
         pass
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Button callbacks"""
+    """Button callbacks with enhanced UI"""
     query = update.callback_query
     await query.answer()
     
+    user_id = update.effective_user.id
+    
     if query.data == "proxy_menu":
-        await proxy_menu(update, context)
+        await query.message.delete()
+        # Create a fake update for proxy_menu
+        fake_update = Update(
+            update_id=update.update_id,
+            message=query.message
+        )
+        await proxy_menu(fake_update, context)
+    
+    elif query.data == "my_stats":
+        try:
+            conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+            cursor = conn.cursor()
+            cursor.execute('SELECT credits, total_checks, valid_creds, created_at FROM users WHERE user_id = ?', (user_id,))
+            result = cursor.fetchone()
+            conn.close()
+            
+            if result:
+                credits, total_checks, valid_creds, created_at = result
+                success_rate = (valid_creds / total_checks * 100) if total_checks > 0 else 0
+                
+                message = f"""╔═══════════════════════════╗
+║   📊 **YOUR STATISTICS**    ║
+╚═══════════════════════════╝
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  💰 **Credits**
+┃  ➤ Balance: `{credits}`
+┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  🔍 **Activity**
+┃  ➤ Total Checks: `{total_checks}`
+┃  ➤ Valid Found: `{valid_creds}`
+┃  ➤ Success Rate: `{success_rate:.1f}%`
+┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  📅 **Account Info**
+┃  ➤ Member Since: `{created_at[:10]}`
+┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+🔄 Use `/start` for main menu"""
+                
+                await query.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+        except Exception as e:
+            await query.message.reply_text("❌ Error loading stats")
+    
+    elif query.data == "help_menu":
+        message = """╔═══════════════════════════╗
+║   ❓ **HELP & GUIDE**       ║
+╚═══════════════════════════╝
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  📖 **How It Works**
+┃
+┃  1️⃣ Send login URL
+┃  2️⃣ Upload credentials file
+┃  3️⃣ Get valid accounts
+┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  📄 **File Format**
+┃
+┃  ✓ Text file (.txt)
+┃  ✓ Format: `email:password`
+┃  ✓ One per line
+┃  ✓ Max 200 lines
+┃
+┃  ✅ Example:
+┃  `user@site.com:Pass123`
+┃  `admin@test.com:Secret456`
+┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  💳 **Pricing**
+┃
+┃  • 1 Credit = 1 Line
+┃  • New users: 1000 credits
+┃  • Pay per use
+┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  🔧 **Commands**
+┃
+┃  • `/start` - Main menu
+┃  • `/proxy` - Configure proxy
+┃  • `/stats` - Admin only
+┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+🔄 Use `/start` to begin checking"""
+        
+        await query.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
 
 # ==================== MAIN ====================
 def main():
@@ -460,6 +823,7 @@ def main():
     
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+    app.add_handler(MessageHandler(filters.Document.ALL, message_handler))
     
     logger.info("✅ Bot fully configured - starting...")
     app.run_polling(
