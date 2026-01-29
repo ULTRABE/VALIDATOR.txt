@@ -27,9 +27,11 @@ from dotenv import load_dotenv
 load_dotenv()
 BOT_TOKEN = os.getenv('BOT_TOKEN', '')
 ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))
+OWNER_ID = int(os.getenv('OWNER_ID', '0'))  # Owner gets startup notifications
 DB_FILE = 'users.db'
 MAX_LINES = 200
 DELAY_SEC = 1.0
+PROGRESS_UPDATE_INTERVAL = 1  # Update progress bar every N checks
 
 # ==================== LOGGING ====================
 logging.basicConfig(
@@ -57,7 +59,8 @@ def init_database():
                 credits INTEGER DEFAULT 1000,
                 total_checks INTEGER DEFAULT 0,
                 valid_creds INTEGER DEFAULT 0,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                last_active TEXT DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         conn.commit()
@@ -65,6 +68,28 @@ def init_database():
         logger.info("✅ Database initialized")
     except Exception as e:
         logger.error(f"❌ DB Error: {e}")
+
+def get_all_user_ids() -> list:
+    """Get all user IDs from database"""
+    try:
+        conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+        cursor = conn.cursor()
+        cursor.execute('SELECT user_id FROM users')
+        result = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        return result
+    except:
+        return []
+
+def update_user_activity(user_id: int):
+    """Update user's last active timestamp"""
+    try:
+        conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+        conn.execute('UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE user_id = ?', (user_id,))
+        conn.commit()
+        conn.close()
+    except:
+        pass
 
 def get_user_credits(user_id: int) -> int:
     """Get credits"""
@@ -108,12 +133,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start command"""
     user_id = update.effective_user.id
     
-    # Create user
+    # Create user and update activity
     try:
         conn = sqlite3.connect(DB_FILE, check_same_thread=False)
         conn.execute('INSERT OR IGNORE INTO users (user_id, credits) VALUES (?, 1000)', (user_id,))
         conn.commit()
         conn.close()
+        update_user_activity(user_id)
     except:
         pass
     
@@ -307,9 +333,16 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 # ==================== FILE PROCESSING ====================
+def create_progress_bar(current: int, total: int, length: int = 20) -> str:
+    """Create visual progress bar"""
+    filled = int(length * current / total)
+    bar = '█' * filled + '░' * (length - filled)
+    percentage = int(100 * current / total)
+    return f"[{bar}] {percentage}%"
+
 async def process_credentials(update: Update, context: ContextTypes.DEFAULT_TYPE,
                             filename: str, login_url: str, proxy: str = ''):
-    """Process credential file"""
+    """Process credential file with live progress bar"""
     user_id = update.effective_user.id
     
     try:
@@ -332,27 +365,46 @@ async def process_credentials(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text("❌ **Insufficient credits**\nUse `/start` to check balance")
             return
         
-        # Update stats
+        # Update stats and activity
         update_stats(user_id, total_lines)
+        update_user_activity(user_id)
         
         progress_msg = await update.message.reply_text(
-            f"🔍 **Checking {total_lines} credentials...**\n"
-            f"⏳ `{get_user_credits(user_id)}` credits remaining"
+            f"🔍 **Checking {total_lines} credentials...**\n\n"
+            f"{create_progress_bar(0, total_lines)}\n\n"
+            f"📊 Progress: `0/{total_lines}`\n"
+            f"✅ Valid: `0`\n"
+            f"💰 Credits: `{get_user_credits(user_id)}`",
+            parse_mode=ParseMode.MARKDOWN
         )
         
-        # Process each line
+        # Process each line with live updates
         valid_creds = []
+        start_time = time.time()
+        
         for i, credential in enumerate(lines, 1):
             if await test_credential(credential, login_url, proxy):
                 valid_creds.append(credential)
             
-            # Progress update
-            if i % 10 == 0 or i == total_lines:
-                await progress_msg.edit_text(
-                    f"📊 **Progress**: `{i}/{total_lines}`\n"
-                    f"✅ **Valid so far**: `{len(valid_creds)}`\n"
-                    f"⏳ `{get_user_credits(user_id)}` credits left"
-                )
+            # Live progress update every check
+            if i % PROGRESS_UPDATE_INTERVAL == 0 or i == total_lines:
+                elapsed = time.time() - start_time
+                speed = i / elapsed if elapsed > 0 else 0
+                eta = (total_lines - i) / speed if speed > 0 else 0
+                
+                try:
+                    await progress_msg.edit_text(
+                        f"🔍 **Checking credentials...**\n\n"
+                        f"{create_progress_bar(i, total_lines)}\n\n"
+                        f"📊 Progress: `{i}/{total_lines}`\n"
+                        f"✅ Valid: `{len(valid_creds)}`\n"
+                        f"⚡ Speed: `{speed:.1f}/s`\n"
+                        f"⏱️ ETA: `{int(eta)}s`\n"
+                        f"💰 Credits: `{get_user_credits(user_id)}`",
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                except Exception:
+                    pass  # Ignore rate limit errors
             
             await asyncio.sleep(DELAY_SEC)
         
@@ -363,12 +415,22 @@ async def process_credentials(update: Update, context: ContextTypes.DEFAULT_TYPE
             
             update_stats(user_id, 0, len(valid_creds))
             await progress_msg.edit_text(
-                f"🎉 **COMPLETE**\n"
-                f"✅ `{len(valid_creds)}/{total_lines}` valid\n"
-                f"💰 `{get_user_credits(user_id)}` credits left"
+                f"🎉 **COMPLETE**\n\n"
+                f"{create_progress_bar(total_lines, total_lines)}\n\n"
+                f"✅ Valid: `{len(valid_creds)}/{total_lines}`\n"
+                f"⏱️ Time: `{int(time.time() - start_time)}s`\n"
+                f"💰 Credits: `{get_user_credits(user_id)}`",
+                parse_mode=ParseMode.MARKDOWN
             )
         else:
-            await progress_msg.edit_text("❌ **No valid credentials found**")
+            await progress_msg.edit_text(
+                f"❌ **No valid credentials found**\n\n"
+                f"{create_progress_bar(total_lines, total_lines)}\n\n"
+                f"📊 Checked: `{total_lines}`\n"
+                f"⏱️ Time: `{int(time.time() - start_time)}s`\n"
+                f"💰 Credits: `{get_user_credits(user_id)}`",
+                parse_mode=ParseMode.MARKDOWN
+            )
             
     except Exception as e:
         logger.error(f"Processing error: {e}")
@@ -440,6 +502,55 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data == "proxy_menu":
         await proxy_menu(update, context)
 
+# ==================== STARTUP NOTIFICATIONS ====================
+async def send_startup_notifications(app: Application):
+    """Send bot startup notification to all users and owner"""
+    try:
+        logger.info("📢 Sending startup notifications...")
+        
+        # Get all user IDs from database
+        user_ids = get_all_user_ids()
+        
+        # Always include owner if not in list
+        if OWNER_ID and OWNER_ID not in user_ids:
+            user_ids.append(OWNER_ID)
+        
+        if not user_ids:
+            logger.warning("⚠️ No users to notify")
+            return
+        
+        startup_message = (
+            "🚀 **Bot is Started!**\n\n"
+            "✅ The Auth Checker Bot is now online and ready to use.\n\n"
+            "💡 Use /start to begin checking credentials!"
+        )
+        
+        success_count = 0
+        fail_count = 0
+        
+        for user_id in user_ids:
+            try:
+                await app.bot.send_message(
+                    chat_id=user_id,
+                    text=startup_message,
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                success_count += 1
+                logger.info(f"✅ Notified user {user_id}")
+                await asyncio.sleep(0.05)  # Rate limit protection
+            except Exception as e:
+                fail_count += 1
+                logger.warning(f"❌ Failed to notify {user_id}: {e}")
+        
+        logger.info(f"📢 Startup notifications: {success_count} sent, {fail_count} failed")
+        
+    except Exception as e:
+        logger.error(f"❌ Startup notification error: {e}")
+
+async def post_init(app: Application):
+    """Post-initialization tasks"""
+    await send_startup_notifications(app)
+
 # ==================== MAIN ====================
 def main():
     """Start bot"""
@@ -460,6 +571,9 @@ def main():
     
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+    
+    # Add post-init hook for startup notifications
+    app.post_init = post_init
     
     logger.info("✅ Bot fully configured - starting...")
     app.run_polling(
