@@ -554,32 +554,49 @@ async def post_init(app: Application):
 # ==================== MAIN ====================
 def main():
     """Start bot"""
-    if not BOT_TOKEN:
-        logger.error("❌ BOT_TOKEN not found in environment")
+    # Validate BOT_TOKEN
+    if not BOT_TOKEN or BOT_TOKEN in ['', 'your_telegram_bot_token', 'your_bot_token_here']:
+        logger.error("❌ CRITICAL ERROR: BOT_TOKEN not configured!")
+        logger.error("❌ Please set BOT_TOKEN environment variable with your actual bot token")
+        logger.error("❌ Get your token from @BotFather on Telegram")
+        logger.error("❌ Example: BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz")
+        return
+    
+    # Validate token format
+    if not BOT_TOKEN.count(':') == 1 or len(BOT_TOKEN) < 40:
+        logger.error(f"❌ INVALID BOT_TOKEN FORMAT: {BOT_TOKEN[:20]}...")
+        logger.error("❌ Token should be in format: 123456789:ABCdefGHIjklMNOpqrsTUVwxyz")
+        logger.error("❌ Get a valid token from @BotFather on Telegram")
         return
     
     logger.info("🚀 Initializing Auth Bot...")
+    logger.info(f"🔑 Token: {BOT_TOKEN[:10]}...{BOT_TOKEN[-10:]}")
     init_database()
     
-    # Create application
-    app = Application.builder().token(BOT_TOKEN).build()
-    
-    # Register handlers (CRITICAL ORDER)
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("stats", stats_cmd))
-    app.add_handler(CommandHandler("proxy", proxy_menu))
-    
-    app.add_handler(CallbackQueryHandler(callback_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
-    
-    # Add post-init hook for startup notifications
-    app.post_init = post_init
-    
-    logger.info("✅ Bot fully configured - starting...")
-    app.run_polling(
-        drop_pending_updates=True,
-        allowed_updates=Update.ALL_TYPES
-    )
+    try:
+        # Create application
+        app = Application.builder().token(BOT_TOKEN).build()
+        
+        # Register handlers (CRITICAL ORDER)
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(CommandHandler("stats", stats_cmd))
+        app.add_handler(CommandHandler("proxy", proxy_menu))
+        
+        app.add_handler(CallbackQueryHandler(callback_handler))
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+        
+        # Add post-init hook for startup notifications
+        app.post_init = post_init
+        
+        logger.info("✅ Bot fully configured - starting...")
+        app.run_polling(
+            drop_pending_updates=True,
+            allowed_updates=Update.ALL_TYPES
+        )
+    except Exception as e:
+        logger.error(f"❌ FATAL ERROR: {e}")
+        logger.error("❌ Check your BOT_TOKEN and environment variables")
+        raise
 
 if __name__ == "__main__":
     main()
