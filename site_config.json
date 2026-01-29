@@ -1,0 +1,57 @@
+{
+  "sites": {
+    "example_site": {
+      "login_url": "https://example.com/login",
+      "method": "POST",
+      "username_field": "email",
+      "password_field": "password",
+      "success_indicators": [
+        "dashboard",
+        "welcome",
+        "logged in successfully",
+        "my account",
+        "profile"
+      ],
+      "fail_indicators": [
+        "invalid credentials",
+        "incorrect password",
+        "login failed",
+        "wrong username"
+      ],
+      "2fa_indicators": [
+        "two-factor",
+        "2fa",
+        "verification code",
+        "enter code",
+        "authenticator"
+      ],
+      "captcha_indicators": [
+        "captcha",
+        "recaptcha",
+        "hcaptcha",
+        "verify you are human",
+        "security check"
+      ],
+      "reset_indicators": [
+        "reset password",
+        "password expired",
+        "must change password",
+        "update your password",
+        "password reset required"
+      ],
+      "additional_fields": {},
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9"
+      }
+    }
+  },
+  "global_settings": {
+    "timeout": 15,
+    "delay_between_requests": 2,
+    "max_retries": 2,
+    "verify_ssl": true,
+    "follow_redirects": true
+  }
+}
