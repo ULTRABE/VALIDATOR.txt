@@ -49,6 +49,9 @@ user_states: Dict[int, dict] = {}
 user_sessions: Dict[int, dict] = {}
 
 # ==================== DATABASE ====================
+DEFAULT_PROXY_FILE = 'default_proxies.txt'
+DEFAULT_PROXY_USER_ID = 0  # System user ID for default proxies
+
 def init_database():
     """Initialize SQLite"""
     try:
@@ -83,6 +86,42 @@ def init_database():
         logger.info("✅ Database initialized")
     except Exception as e:
         logger.error(f"❌ DB Error: {e}")
+
+def load_default_proxies():
+    """Load default proxies from file on first run"""
+    try:
+        if not os.path.exists(DEFAULT_PROXY_FILE):
+            logger.warning(f"⚠️ Default proxy file not found: {DEFAULT_PROXY_FILE}")
+            return
+        
+        # Check if default proxies already loaded
+        conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+        cursor = conn.cursor()
+        cursor.execute('SELECT COUNT(*) FROM proxies WHERE user_id = ?', (DEFAULT_PROXY_USER_ID,))
+        count = cursor.fetchone()[0]
+        
+        if count > 0:
+            logger.info(f"✅ Default proxies already loaded ({count} proxies)")
+            conn.close()
+            return
+        
+        # Load proxies from file
+        with open(DEFAULT_PROXY_FILE, 'r') as f:
+            proxies = [line.strip() for line in f if line.strip()]
+        
+        # Insert default proxies
+        for proxy_url in proxies:
+            proxy_type = 'socks5' if 'socks5' in proxy_url.lower() else 'http'
+            conn.execute('''
+                INSERT INTO proxies (user_id, proxy_url, proxy_type)
+                VALUES (?, ?, ?)
+            ''', (DEFAULT_PROXY_USER_ID, proxy_url, proxy_type))
+        
+        conn.commit()
+        conn.close()
+        logger.info(f"✅ Loaded {len(proxies)} default proxies")
+    except Exception as e:
+        logger.error(f"❌ Error loading default proxies: {e}")
 
 def get_all_user_ids() -> list:
     """Get all user IDs from database"""
@@ -140,10 +179,12 @@ def get_user_proxies(user_id: int) -> list:
         return []
 
 def get_active_proxy(user_id: int) -> str:
-    """Get best active proxy for user"""
+    """Get best active proxy for user (includes default proxies)"""
     try:
         conn = sqlite3.connect(DB_FILE, check_same_thread=False)
         cursor = conn.cursor()
+        
+        # First try user's own proxies
         cursor.execute('''
             SELECT proxy_url
             FROM proxies
@@ -152,6 +193,18 @@ def get_active_proxy(user_id: int) -> str:
             LIMIT 1
         ''', (user_id,))
         result = cursor.fetchone()
+        
+        # If no user proxies, use default proxies
+        if not result:
+            cursor.execute('''
+                SELECT proxy_url
+                FROM proxies
+                WHERE user_id = ? AND is_active = 1
+                ORDER BY success_count DESC, avg_response_time ASC
+                LIMIT 1
+            ''', (DEFAULT_PROXY_USER_ID,))
+            result = cursor.fetchone()
+        
         conn.close()
         return result[0] if result else ''
     except:
@@ -865,6 +918,7 @@ def main():
     logger.info("🚀 Initializing Auth Bot...")
     logger.info(f"🔑 Token: {BOT_TOKEN[:10]}...{BOT_TOKEN[-10:]}")
     init_database()
+    load_default_proxies()
     
     try:
         # Create application
