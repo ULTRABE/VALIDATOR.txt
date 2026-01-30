@@ -4,3 +4,4 @@ __pycache__/
 *.log
 users.db
 *.txt
+!default_proxies.txt
